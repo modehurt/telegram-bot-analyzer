@@ -94,6 +94,96 @@ class GPTService:
         except Exception as e:
             return f"❌ Ошибка генерации идеи: {str(e)}\n\nПопробуйте другую тему или обратитесь в поддержку."
     
+    async def generate_post_idea_pro(self, category: str, user_id: int) -> str:
+        """Генерирует идею поста для PRO пользователей с анализом канала"""
+        try:
+            # Валидация входных данных согласно ТЗ
+            if not self.validate_input(category):
+                return json.dumps({
+                    "status": "error",
+                    "message": "Запрос не распознан. Пожалуйста, выберите категорию или переформулируйте.",
+                    "show_categories": True
+                }, ensure_ascii=False)
+            
+            # Получаем данные о каналах пользователя
+            user_channels = await data_analyzer.get_user_channels(user_id)
+            channel_data = []
+            
+            if user_channels:
+                for channel in user_channels[:3]:  # Берем первые 3 канала
+                    posts = await data_analyzer.get_channel_posts(channel['channel_id'], limit=5)
+                    if posts:
+                        channel_data.append({
+                            'title': channel.get('title', 'Н/Д'),
+                            'description': channel.get('description', ''),
+                            'posts': posts
+                        })
+            
+            # Формируем контекст на основе каналов пользователя
+            context = ""
+            if channel_data:
+                context += "\n\n**Информация о ваших каналах:**\n"
+                for i, channel in enumerate(channel_data, 1):
+                    context += f"\n{i}. **{channel['title']}**\n"
+                    if channel['description']:
+                        context += f"Описание: {channel['description']}\n"
+                    
+                    # Анализируем лучшие посты
+                    top_posts = sorted(channel['posts'], key=lambda x: x.get('views', 0), reverse=True)[:2]
+                    if top_posts:
+                        context += "Лучшие посты:\n"
+                        for post in top_posts:
+                            views = post.get('views', 0)
+                            text = post.get('text', '')[:100] + "..." if len(post.get('text', '')) > 100 else post.get('text', '')
+                            er = post.get('er', 0)
+                            context += f"• {text} (просмотры: {views}, ER: {er:.2f}%)\n"
+            
+            # Получаем тренды и популярные посты
+            trending_data = await data_analyzer.get_trending_topics(category, days=7)
+            popular_posts = await data_analyzer.get_popular_posts_by_category(category, limit=5)
+            
+            if trending_data:
+                context += f"\n\n**Актуальные тренды в теме '{category}':**\n"
+                for trend in trending_data[:3]:
+                    context += f"• {trend.get('topic', 'Н/Д')} - {trend.get('posts_count', 0)} постов\n"
+            
+            if popular_posts:
+                context += f"\n**Популярные форматы в теме '{category}':**\n"
+                formats = {}
+                for post in popular_posts:
+                    fmt = post.get('format', 'unknown')
+                    formats[fmt] = formats.get(fmt, 0) + 1
+                for fmt, count in sorted(formats.items(), key=lambda x: x[1], reverse=True)[:3]:
+                    context += f"• {fmt} - {count} постов\n"
+            
+            prompt = f"""Ты — эксперт по созданию контента для Telegram-каналов. Создай идею для поста на тему: «{category}».
+
+{context}
+
+**Требования к ответу:**
+1. Учитывай стиль и формат постов из каналов пользователя
+2. Анализируй тренды и популярные форматы в теме
+3. Предложи уникальную идею, которая будет выделяться
+
+**Структура ответа:**
+**Идея:** [Краткий заголовок]
+**Суть:** [Основная мысль поста]
+**Формат:** [Рекомендуемый формат: сторителлинг, список, факт/вопрос, и т.п.]
+**Советы:** [Советы по подаче: тон, структура, интерактив]
+**Почему сработает:** [Обоснование на основе анализа данных]"""
+
+            response = await asyncio.to_thread(
+                self.client.chat.completions.create,
+                model="gpt-4",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=800,
+                temperature=0.8
+            )
+            
+            return response.choices[0].message.content
+        except Exception as e:
+            return f"❌ Ошибка генерации PRO идеи: {str(e)}\n\nПопробуйте другую тему или обратитесь в поддержку."
+    
     async def analyze_popular_posts(self, category: str, posts_data: list) -> str:
         """Анализирует популярные посты и дает рекомендации"""
         if not posts_data:

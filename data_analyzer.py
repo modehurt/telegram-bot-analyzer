@@ -592,6 +592,65 @@ class DataAnalyzer:
                 "format_analysis": formats,
                 "total_posts": total_posts
             }
+    
+    async def get_user_channels(self, user_id: int) -> List[Dict]:
+        """Получает каналы пользователя"""
+        async with SessionLocal() as session:
+            # Получаем каналы, связанные с пользователем
+            channels_query = await session.execute("""
+                SELECT DISTINCT c.channel_id, c.title, c.username, c.description
+                FROM channels c
+                JOIN account_channels ac ON c.channel_id = ac.channel_id
+                JOIN accounts a ON ac.account_id = a.account_id
+                WHERE a.phone_number = :user_id
+                   OR a.account_id = :user_id
+            """, {"user_id": str(user_id)})
+            
+            channels = []
+            for row in channels_query:
+                channel_data = {
+                    "channel_id": row.channel_id,
+                    "title": row.title,
+                    "username": row.username,
+                    "description": row.description
+                }
+                channels.append(channel_data)
+            
+            return channels
+    
+    async def get_channel_posts(self, channel_id: str, limit: int = 10) -> List[Dict]:
+        """Получает посты канала"""
+        async with SessionLocal() as session:
+            posts_query = await session.execute("""
+                SELECT p.post_id, p.title, p.body, p.format, p.cta, p.is_ad,
+                       ps.views_count, ps.er, ps.reactions, ps.comments, ps.forwards,
+                       p.posted_at
+                FROM posts p
+                LEFT JOIN posts_snapshot ps ON p.post_id = ps.post_id
+                WHERE p.channel_id = :channel_id
+                ORDER BY p.posted_at DESC
+                LIMIT :limit
+            """, {"channel_id": channel_id, "limit": limit})
+            
+            posts = []
+            for row in posts_query:
+                post_data = {
+                    "post_id": row.post_id,
+                    "title": row.title,
+                    "text": row.body,
+                    "format": row.format,
+                    "cta": row.cta,
+                    "is_ad": row.is_ad,
+                    "views": row.views_count or 0,
+                    "er": row.er or 0,
+                    "reactions": json.loads(row.reactions) if row.reactions else {},
+                    "comments": row.comments or 0,
+                    "forwards": row.forwards or 0,
+                    "posted_at": row.posted_at
+                }
+                posts.append(post_data)
+            
+            return posts
 
 # Глобальный экземпляр анализатора данных
 data_analyzer = DataAnalyzer() 

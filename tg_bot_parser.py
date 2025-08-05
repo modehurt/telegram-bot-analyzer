@@ -51,19 +51,52 @@ def get_user_info(user_id):
 async def post_idea(client: Client, message: Message):
     """Генерирует идеи постов"""
     user_id = message.from_user.id
+    user_info = get_user_info(user_id)
+    
+    # Проверяем лимит
     if not check_user_limit(user_id):
-        await message.reply_text("❌ Достигнут дневной лимит запросов. Обновитесь до PRO для неограниченного доступа!")
+        remaining = user_info.get('remaining_requests', 0)
+        limit = user_info.get('daily_limit', FREE_LIMIT)
+        await message.reply_text(
+            f"❌ Достигнут дневной лимит запросов ({limit} в день).\n"
+            f"Осталось запросов: {remaining}\n"
+            "Обновитесь до PRO для неограниченного доступа!"
+        )
         return
     
-    keyboard = [[InlineKeyboardButton(cat, callback_data=f"post_idea_cat_{i}")] for i, cat in enumerate(CATEGORIES)]
+    # Создаем клавиатуру с категориями в виде inline кнопок
+    keyboard = []
+    for i, cat in enumerate(CATEGORIES):
+        keyboard.append([InlineKeyboardButton(cat, callback_data=f"post_idea_cat_{i}")])
+    
+    # Добавляем кнопку для ручного ввода
+    keyboard.append([InlineKeyboardButton("✏️ Ввести тему вручную", callback_data="post_idea_manual")])
+    
     await message.reply_text(
-        "✏️ Выберите тему для идеи поста или введите вручную:",
+        "💡 **ИДЕИ ДЛЯ ПОСТОВ**\n\n"
+        "Выберите категорию или введите тему вручную:\n\n"
+        f"🆓 **FREE**: {FREE_LIMIT} раз в день\n"
+        f"⭐ **PRO**: неограниченно",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def post_idea_cat_callback(client: Client, callback_query: CallbackQuery):
     """Обработчик выбора категории для идеи поста"""
     await callback_query.answer()
+    user_id = callback_query.from_user.id
+    user_info = get_user_info(user_id)
+    
+    # Проверяем лимит
+    if not check_user_limit(user_id):
+        remaining = user_info.get('remaining_requests', 0)
+        limit = user_info.get('daily_limit', FREE_LIMIT)
+        await callback_query.edit_message_text(
+            f"❌ Достигнут дневной лимит запросов ({limit} в день).\n"
+            f"Осталось запросов: {remaining}\n"
+            "Обновитесь до PRO для неограниченного доступа!"
+        )
+        return
+    
     idx = int(callback_query.data.split('_')[-1])
     category = CATEGORIES[idx]
     
@@ -71,10 +104,21 @@ async def post_idea_cat_callback(client: Client, callback_query: CallbackQuery):
     await callback_query.edit_message_text(f"🤔 Генерирую идею для поста по теме: {category}...")
     
     try:
-        # Генерируем идею с помощью GPT
-        idea = await gpt_service.generate_post_idea(category)
+        # Определяем тип пользователя и генерируем идею
+        is_pro = user_info.get('is_pro', False)
         
-        response_text = f"💡 ИДЕЯ ДЛЯ ПОСТА\n\nТема: {category}\n\n{idea}"
+        if is_pro:
+            # PRO пользователь - используем расширенный анализ
+            idea = await gpt_service.generate_post_idea_pro(category, user_id)
+        else:
+            # FREE пользователь - базовая генерация
+            idea = await gpt_service.generate_post_idea(category)
+        
+        # Форматируем ответ
+        response_text = f"💡 **ИДЕЯ ДЛЯ ПОСТА**\n\n"
+        response_text += f"📂 **Тема**: {category}\n"
+        response_text += f"👤 **Тип**: {'⭐ PRO' if is_pro else '🆓 FREE'}\n\n"
+        response_text += f"{idea}"
         
         # Добавляем кнопки для дальнейших действий
         keyboard = [
@@ -85,10 +129,63 @@ async def post_idea_cat_callback(client: Client, callback_query: CallbackQuery):
         
         await callback_query.edit_message_text(
             response_text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
         )
     except Exception as e:
         await callback_query.edit_message_text(f"❌ Ошибка генерации идеи: {str(e)}")
+
+async def handle_post_idea_topic(client: Client, message: Message):
+    """Обработчик ручного ввода темы для идеи поста"""
+    user_id = message.from_user.id
+    user_info = get_user_info(user_id)
+    topic = message.text.strip()
+    
+    # Проверяем лимит
+    if not check_user_limit(user_id):
+        remaining = user_info.get('remaining_requests', 0)
+        limit = user_info.get('daily_limit', FREE_LIMIT)
+        await message.reply_text(
+            f"❌ Достигнут дневной лимит запросов ({limit} в день).\n"
+            f"Осталось запросов: {remaining}\n"
+            "Обновитесь до PRO для неограниченного доступа!"
+        )
+        return
+    
+    # Показываем индикатор загрузки
+    loading_msg = await message.reply_text(f"🤔 Генерирую идею для поста по теме: {topic}...")
+    
+    try:
+        # Определяем тип пользователя и генерируем идею
+        is_pro = user_info.get('is_pro', False)
+        
+        if is_pro:
+            # PRO пользователь - используем расширенный анализ
+            idea = await gpt_service.generate_post_idea_pro(topic, user_id)
+        else:
+            # FREE пользователь - базовая генерация
+            idea = await gpt_service.generate_post_idea(topic)
+        
+        # Форматируем ответ
+        response_text = f"💡 **ИДЕЯ ДЛЯ ПОСТА**\n\n"
+        response_text += f"📂 **Тема**: {topic}\n"
+        response_text += f"👤 **Тип**: {'⭐ PRO' if is_pro else '🆓 FREE'}\n\n"
+        response_text += f"{idea}"
+        
+        # Добавляем кнопки для дальнейших действий
+        keyboard = [
+            [InlineKeyboardButton("🔄 Новая идея", callback_data="post_idea_manual")],
+            [InlineKeyboardButton("📝 Развернуть идею", callback_data=f"expand_idea_manual_{topic}")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
+        ]
+        
+        await loading_msg.edit_text(
+            response_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await loading_msg.edit_text(f"❌ Ошибка генерации идеи: {str(e)}")
 
 async def popular_posts(client: Client, message: Message):
     """Показывает популярные посты"""
