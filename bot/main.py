@@ -18,12 +18,16 @@ from tg_bot_parser import (
     trending_channels, best_times,
     ad_tips_cat_callback, promo_plan_cat_callback, content_trends_cat_callback,
     trend_detective_cat_callback, falling_trends_cat_callback,
-    trending_channels_cat_callback, best_times_cat_callback
+    trending_channels_cat_callback, best_times_cat_callback,
+    handle_post_idea_topic
 )
 from gpt_service import gpt_service
 from subscription_service import subscription_service
 
 load_dotenv()
+
+# Глобальный словарь для хранения сессий пользователей
+user_sessions = {}
 
 API_ID = int(os.getenv("PYROGRAM_API_ID", "0"))
 API_HASH = os.getenv("PYROGRAM_API_HASH", "")
@@ -157,6 +161,26 @@ async def upgrade_pro_command(client: Client, message: Message):
 @app.on_callback_query(filters.regex(r"^post_idea_cat_"))
 async def post_idea_callback(client: Client, callback_query: CallbackQuery):
     await post_idea_cat_callback(client, callback_query)
+
+@app.on_callback_query(filters.regex(r"^post_idea_manual$"))
+async def post_idea_manual_callback(client: Client, callback_query: CallbackQuery):
+    """Обработчик для ручного ввода темы идеи поста"""
+    await callback_query.answer()
+    user_id = callback_query.from_user.id
+    
+    # Сохраняем состояние ожидания ввода темы
+    user_sessions[user_id] = {'state': 'waiting_for_post_idea_topic'}
+    
+    await callback_query.edit_message_text(
+        "✏️ **Введите тему для идеи поста:**\n\n"
+        "Например:\n"
+        "• про выгорание\n"
+        "• как увеличить продажи\n"
+        "• советы по питанию\n"
+        "• новости в IT\n\n"
+        "Или выберите категорию из списка выше.",
+        parse_mode="Markdown"
+    )
 
 @app.on_callback_query(filters.regex(r"^popular_posts_cat_"))
 async def popular_posts_callback(client: Client, callback_query: CallbackQuery):
@@ -330,26 +354,47 @@ async def menu_callback(client: Client, callback_query: CallbackQuery):
         
         await callback_query.edit_message_text(response_text, reply_markup=keyboard)
 
-# Обработчики текстовых сообщений для PRO функций
+# Обработчики текстовых сообщений
 @app.on_message(filters.text & ~filters.command)
 async def handle_text_message(client: Client, message: Message):
-    """Обрабатывает текстовые сообщения для PRO функций"""
+    """Обрабатывает текстовые сообщения"""
     user_id = message.from_user.id
     text = message.text.strip()
     
-    # Проверяем, ожидаем ли мы текст от пользователя
-    # Здесь можно добавить логику для обработки текста постов для анализа
+    # Проверяем, есть ли активная сессия для пользователя
+    if user_id in user_sessions:
+        session = user_sessions[user_id]
+        
+        if session['state'] == 'waiting_for_post_idea_topic':
+            # Обработка темы для идеи поста
+            await handle_post_idea_topic(client, message)
+            user_sessions.pop(user_id, None)
+            return
+        elif session['state'] == 'waiting_for_post_text':
+            # Обработка текста поста для анализа (PRO функция)
+            await post_feedback(client, message)
+            user_sessions.pop(user_id, None)
+            return
+        elif session['state'] == 'waiting_for_rewrite_text':
+            # Обработка текста для переписывания (PRO функция)
+            await rewrite_post(client, message)
+            user_sessions.pop(user_id, None)
+            return
+        elif session['state'] == 'waiting_for_ad_text':
+            # Обработка текста рекламы для анализа (PRO функция)
+            await ad_feedback(client, message)
+            user_sessions.pop(user_id, None)
+            return
     
     # Если это не специальный текст, игнорируем
-    if len(text) < 10:  # Слишком короткий текст
+    if len(text) < 5:  # Слишком короткий текст
         return
     
-    # Проверяем, является ли пользователь PRO
+    # Проверяем, является ли пользователь PRO для специальных функций
     user_info = subscription_service.get_subscription_info(user_id)
     if not user_info['is_pro']:
         await message.reply_text(
-            "🔒 Эта функция доступна только в PRO версии!\n\n"
-            "💡 Для анализа ваших постов обновитесь до PRO."
+            "💡 Введите команду /post_idea для получения идей постов или обновитесь до PRO для расширенных функций."
         )
         return
     
