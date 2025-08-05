@@ -1,0 +1,26 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: tgstat
+      POSTGRES_USER: tguser
+      POSTGRES_PASSWORD: tgpass
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  bot:
+    build: .
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql://tguser:tgpass@db:5432/tgstat
+      PYROGRAM_API_ID: 'your_api_id'
+      PYROGRAM_API_HASH: 'your_api_hash'
+      PYROGRAM_BOT_TOKEN: 'your_bot_token'
+    volumes:
+      - .:/app
+volumes:
+  pgdata:
